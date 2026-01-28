@@ -1,5 +1,52 @@
+# Binaries
 api2spec-fixture-chi
+bin/
 *.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of go coverage
+*.out
+coverage.html
+
+# Go workspace
+go.work
+go.work.sum
+
+# Vendor (if not using go modules properly)
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Debug
+debug
+__debug_bin*
+
+# Temporary
+tmp/
+temp/
+
+# Logs
+*.log
 
 # Claude Code
 .claude/
