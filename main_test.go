@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -626,5 +628,353 @@ func TestAllEndpoints_StatusCodes(t *testing.T) {
 
 			assert.Equal(t, tt.expectedStatus, w.Code, "unexpected status code for %s %s", tt.method, tt.path)
 		})
+	}
+}
+
+// ========== Concurrent Request Tests ==========
+// These tests verify thread-safety of the handlers under concurrent access.
+
+func TestConcurrentReads_Users(t *testing.T) {
+	router := setupRouter()
+	const numRequests = 100
+
+	var wg sync.WaitGroup
+	wg.Add(numRequests)
+
+	errors := make(chan error, numRequests)
+
+	for i := 0; i < numRequests; i++ {
+		go func() {
+			defer wg.Done()
+
+			req := httptest.NewRequest(http.MethodGet, "/users", nil)
+			w := httptest.NewRecorder()
+
+			router.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				errors <- fmt.Errorf("expected status 200, got %d", w.Code)
+				return
+			}
+
+			var users []User
+			if err := json.Unmarshal(w.Body.Bytes(), &users); err != nil {
+				errors <- fmt.Errorf("failed to unmarshal response: %w", err)
+				return
+			}
+
+			if len(users) != 2 {
+				errors <- fmt.Errorf("expected 2 users, got %d", len(users))
+				return
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errors)
+
+	for err := range errors {
+		t.Error(err)
+	}
+}
+
+func TestConcurrentReads_Posts(t *testing.T) {
+	router := setupRouter()
+	const numRequests = 100
+
+	var wg sync.WaitGroup
+	wg.Add(numRequests)
+
+	errors := make(chan error, numRequests)
+
+	for i := 0; i < numRequests; i++ {
+		go func() {
+			defer wg.Done()
+
+			req := httptest.NewRequest(http.MethodGet, "/posts", nil)
+			w := httptest.NewRecorder()
+
+			router.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				errors <- fmt.Errorf("expected status 200, got %d", w.Code)
+				return
+			}
+
+			var posts []Post
+			if err := json.Unmarshal(w.Body.Bytes(), &posts); err != nil {
+				errors <- fmt.Errorf("failed to unmarshal response: %w", err)
+				return
+			}
+
+			if len(posts) != 2 {
+				errors <- fmt.Errorf("expected 2 posts, got %d", len(posts))
+				return
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errors)
+
+	for err := range errors {
+		t.Error(err)
+	}
+}
+
+func TestConcurrentCreates_Users(t *testing.T) {
+	router := setupRouter()
+	const numRequests = 50
+
+	var wg sync.WaitGroup
+	wg.Add(numRequests)
+
+	errors := make(chan error, numRequests)
+
+	for i := 0; i < numRequests; i++ {
+		go func(idx int) {
+			defer wg.Done()
+
+			user := User{
+				Name:  fmt.Sprintf("User%d", idx),
+				Email: fmt.Sprintf("user%d@example.com", idx),
+			}
+			body, err := json.Marshal(user)
+			if err != nil {
+				errors <- fmt.Errorf("failed to marshal user: %w", err)
+				return
+			}
+
+			req := httptest.NewRequest(http.MethodPost, "/users", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			router.ServeHTTP(w, req)
+
+			if w.Code != http.StatusCreated {
+				errors <- fmt.Errorf("expected status 201, got %d", w.Code)
+				return
+			}
+
+			var created User
+			if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+				errors <- fmt.Errorf("failed to unmarshal response: %w", err)
+				return
+			}
+
+			// Verify the response has an ID assigned
+			if created.ID == 0 {
+				errors <- fmt.Errorf("expected non-zero ID, got 0")
+				return
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errors)
+
+	for err := range errors {
+		t.Error(err)
+	}
+}
+
+func TestConcurrentCreates_Posts(t *testing.T) {
+	router := setupRouter()
+	const numRequests = 50
+
+	var wg sync.WaitGroup
+	wg.Add(numRequests)
+
+	errors := make(chan error, numRequests)
+
+	for i := 0; i < numRequests; i++ {
+		go func(idx int) {
+			defer wg.Done()
+
+			post := Post{
+				UserID: 1,
+				Title:  fmt.Sprintf("Post%d", idx),
+				Body:   fmt.Sprintf("Content for post %d", idx),
+			}
+			body, err := json.Marshal(post)
+			if err != nil {
+				errors <- fmt.Errorf("failed to marshal post: %w", err)
+				return
+			}
+
+			req := httptest.NewRequest(http.MethodPost, "/posts", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			router.ServeHTTP(w, req)
+
+			if w.Code != http.StatusCreated {
+				errors <- fmt.Errorf("expected status 201, got %d", w.Code)
+				return
+			}
+
+			var created Post
+			if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+				errors <- fmt.Errorf("failed to unmarshal response: %w", err)
+				return
+			}
+
+			// Verify the response has an ID assigned
+			if created.ID == 0 {
+				errors <- fmt.Errorf("expected non-zero ID, got 0")
+				return
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errors)
+
+	for err := range errors {
+		t.Error(err)
+	}
+}
+
+func TestConcurrentUpdates_Users(t *testing.T) {
+	router := setupRouter()
+	const numRequests = 50
+
+	var wg sync.WaitGroup
+	wg.Add(numRequests)
+
+	errors := make(chan error, numRequests)
+
+	for i := 0; i < numRequests; i++ {
+		go func(idx int) {
+			defer wg.Done()
+
+			user := User{
+				Name:  fmt.Sprintf("UpdatedUser%d", idx),
+				Email: fmt.Sprintf("updated%d@example.com", idx),
+			}
+			body, err := json.Marshal(user)
+			if err != nil {
+				errors <- fmt.Errorf("failed to marshal user: %w", err)
+				return
+			}
+
+			// All goroutines update the same user ID to stress test
+			req := httptest.NewRequest(http.MethodPut, "/users/1", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			router.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				errors <- fmt.Errorf("expected status 200, got %d", w.Code)
+				return
+			}
+
+			var updated User
+			if err := json.Unmarshal(w.Body.Bytes(), &updated); err != nil {
+				errors <- fmt.Errorf("failed to unmarshal response: %w", err)
+				return
+			}
+
+			// Verify the ID in response matches the requested ID
+			if updated.ID != 1 {
+				errors <- fmt.Errorf("expected ID 1, got %d", updated.ID)
+				return
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errors)
+
+	for err := range errors {
+		t.Error(err)
+	}
+}
+
+func TestConcurrentMixedOperations(t *testing.T) {
+	router := setupRouter()
+	const numOpsPerType = 30
+
+	var wg sync.WaitGroup
+	// 4 types of operations: list users, list posts, create user, create post
+	totalOps := numOpsPerType * 4
+	wg.Add(totalOps)
+
+	errors := make(chan error, totalOps)
+
+	// Concurrent list users
+	for i := 0; i < numOpsPerType; i++ {
+		go func() {
+			defer wg.Done()
+
+			req := httptest.NewRequest(http.MethodGet, "/users", nil)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				errors <- fmt.Errorf("list users: expected 200, got %d", w.Code)
+			}
+		}()
+	}
+
+	// Concurrent list posts
+	for i := 0; i < numOpsPerType; i++ {
+		go func() {
+			defer wg.Done()
+
+			req := httptest.NewRequest(http.MethodGet, "/posts", nil)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				errors <- fmt.Errorf("list posts: expected 200, got %d", w.Code)
+			}
+		}()
+	}
+
+	// Concurrent create users
+	for i := 0; i < numOpsPerType; i++ {
+		go func(idx int) {
+			defer wg.Done()
+
+			user := User{Name: fmt.Sprintf("MixedUser%d", idx), Email: fmt.Sprintf("mixed%d@example.com", idx)}
+			body, _ := json.Marshal(user)
+
+			req := httptest.NewRequest(http.MethodPost, "/users", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			if w.Code != http.StatusCreated {
+				errors <- fmt.Errorf("create user: expected 201, got %d", w.Code)
+			}
+		}(i)
+	}
+
+	// Concurrent create posts
+	for i := 0; i < numOpsPerType; i++ {
+		go func(idx int) {
+			defer wg.Done()
+
+			post := Post{UserID: 1, Title: fmt.Sprintf("MixedPost%d", idx), Body: "Content"}
+			body, _ := json.Marshal(post)
+
+			req := httptest.NewRequest(http.MethodPost, "/posts", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			if w.Code != http.StatusCreated {
+				errors <- fmt.Errorf("create post: expected 201, got %d", w.Code)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errors)
+
+	for err := range errors {
+		t.Error(err)
 	}
 }
